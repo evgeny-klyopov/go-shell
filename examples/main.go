@@ -1,13 +1,3 @@
-# Go-shell
-
-Use:
-```shell
-go get "github.com/evgeny-klyopov/go-shell"
-```
-
-
-Example
-```go
 package main
 
 import (
@@ -41,4 +31,3 @@ func main() {
 		}
 	}
 }
-```

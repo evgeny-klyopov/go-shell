@@ -1,77 +1,38 @@
 package shell
 
 import (
-	"bufio"
-	"io"
 	"os/exec"
 	"strings"
 	"sync"
 )
 
 type shell struct {
-	command     string
-	stop        chan bool
-	output      chan string
-	outputError chan string
-	args        string
-	success     bool
-	err         error
-	isStop      bool
-	isOutput    bool
+	commonShell
+	stop    chan bool
+	readers map[string]reader
 }
 
 type Sheller interface {
+	CommonSheller
 	Stop()
 	Run()
-	GetOutput() chan string
-	GetOutputFlag() bool
-	GetCommand() string
-	GetArgs() string
-	GetSuccess() bool
-	GetError() error
-	GetOutputError() chan string
-
+	HasChannel(typeChannel string) bool
+	GetChannel(typeChannel string) chan string
 	exec()
-	reader(r io.Reader, channel chan string)
 }
 
-func New(command string, args string, isOutput bool) Sheller {
+func New(command string, args string, makeStdOut bool, makeStdErr bool) Sheller {
 	return &shell{
-		command:  command,
-		isOutput: isOutput,
-		args:     args,
-		stop:     make(chan bool),
-
-		output:      make(chan string),
-		outputError: make(chan string),
+		stop: make(chan bool),
+		commonShell: commonShell{
+			command: command,
+			args:    args,
+		},
+		readers: map[string]reader{
+			OutTypeChannel: newReader(OutTypeChannel, makeStdOut),
+			ErrTypeChannel: newReader(ErrTypeChannel, makeStdErr),
+		},
 	}
-}
-
-func (s *shell) GetOutputFlag() bool {
-	return s.isOutput
-}
-func (s *shell) GetCommand() string {
-	return s.command
-}
-
-func (s *shell) GetArgs() string {
-	return s.args
-}
-
-func (s *shell) GetSuccess() bool {
-	return s.success
-}
-
-func (s *shell) GetError() error {
-	return s.err
-}
-
-func (s *shell) GetOutputError() chan string {
-	return s.outputError
-}
-
-func (s *shell) GetOutput() chan string {
-	return s.output
 }
 
 func (s *shell) Run() {
@@ -84,22 +45,17 @@ func (s *shell) Stop() {
 }
 
 func (s *shell) exec() {
-	cmd := exec.Command(s.command, strings.Fields(s.args)...)
-
-	var stdOut, stdErr io.Reader
 	var err error
 
-	if s.isOutput == true {
-		stdOut, err = cmd.StdoutPipe()
-		if err != nil {
-			s.err = err
-			s.Stop()
-		}
+	cmd := exec.Command(s.command, strings.Fields(s.args)...)
 
-		stdErr, err = cmd.StderrPipe()
-		if err != nil {
-			s.err = err
-			s.Stop()
+	for _, r := range s.readers {
+		if r.getEnable() == true {
+			err = r.setPipe(cmd)
+			if err != nil {
+				s.err = err
+				s.Stop()
+			}
 		}
 	}
 
@@ -114,9 +70,10 @@ func (s *shell) exec() {
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
-			if s.isOutput == true {
-				go s.reader(stdOut, s.output)
-				go s.reader(stdErr, s.outputError)
+			for _, r := range s.readers {
+				if r.getEnable() == true {
+					go r.startRead()
+				}
 			}
 			wg.Done()
 		}()
@@ -127,8 +84,11 @@ func (s *shell) exec() {
 	}()
 	select {
 	case <-s.stop:
-		close(s.output)
-		close(s.outputError)
+		for _, r := range s.readers {
+			if r.getEnable() == true {
+				r.closeChannel()
+			}
+		}
 	case err = <-done:
 		if err != nil {
 			s.err = err
@@ -137,15 +97,10 @@ func (s *shell) exec() {
 	}
 }
 
-func (s *shell) reader(r io.Reader, channel chan string) {
-	reader := bufio.NewReader(r)
-	for {
-		str, err := reader.ReadString('\n')
+func (s *shell) HasChannel(typeChannel string) bool {
+	return s.readers[typeChannel].getEnable()
+}
 
-		if err != nil {
-			close(channel)
-			break
-		}
-		channel <- strings.TrimSuffix(str, "\n")
-	}
+func (s *shell) GetChannel(typeChannel string) chan string {
+	return s.readers[typeChannel].getChannel()
 }
