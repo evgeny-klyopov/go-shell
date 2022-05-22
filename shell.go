@@ -19,6 +19,7 @@ type Sheller interface {
 	HasChannel(typeChannel string) bool
 	GetChannel(typeChannel string) chan string
 	exec()
+	close()
 }
 
 func New(command string, args string, makeStdOut bool, makeStdErr bool) Sheller {
@@ -42,6 +43,14 @@ func (s *shell) Run() {
 func (s *shell) Stop() {
 	s.isStop = true
 	s.stop <- s.isStop
+}
+
+func (s *shell) HasChannel(typeChannel string) bool {
+	return s.readers[typeChannel].getEnable()
+}
+
+func (s *shell) GetChannel(typeChannel string) chan string {
+	return s.readers[typeChannel].getChannel()
 }
 
 func (s *shell) exec() {
@@ -84,23 +93,20 @@ func (s *shell) exec() {
 	}()
 	select {
 	case <-s.stop:
-		for _, r := range s.readers {
-			if r.getEnable() == true {
-				r.closeChannel()
-			}
-		}
+		s.close()
 	case err = <-done:
 		if err != nil {
 			s.err = err
 		}
+		s.close()
 		s.success = cmd.ProcessState.Success()
 	}
 }
 
-func (s *shell) HasChannel(typeChannel string) bool {
-	return s.readers[typeChannel].getEnable()
-}
-
-func (s *shell) GetChannel(typeChannel string) chan string {
-	return s.readers[typeChannel].getChannel()
+func (s *shell) close() {
+	for _, r := range s.readers {
+		if r.getEnable() == true {
+			r.closeChannel()
+		}
+	}
 }
