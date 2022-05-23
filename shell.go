@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 type shell struct {
@@ -75,31 +76,31 @@ func (s *shell) exec() {
 
 	done := make(chan error, 1)
 
+	for _, r := range s.readers {
+		if r.getEnable() == true {
+			go r.startRead()
+		}
+	}
+
 	go func() {
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
-			for _, r := range s.readers {
-				if r.getEnable() == true {
-					go r.startRead()
-				}
-			}
 			wg.Done()
 		}()
 
 		wg.Wait()
-
 		done <- cmd.Wait()
 	}()
+
 	select {
 	case <-s.stop:
-		s.close()
+		s.err = cmd.Process.Signal(syscall.SIGTERM)
+		s.err = cmd.Process.Signal(syscall.SIGINT)
 	case err = <-done:
 		if err != nil {
 			s.err = err
 		}
-		s.close()
-		s.success = cmd.ProcessState.Success()
 	}
 }
 
