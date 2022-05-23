@@ -11,6 +11,7 @@ type shell struct {
 	commonShell
 	stop    chan bool
 	readers map[string]reader
+	cmd     *exec.Cmd
 }
 
 type Sheller interface {
@@ -19,8 +20,8 @@ type Sheller interface {
 	Run()
 	HasChannel(typeChannel string) bool
 	GetChannel(typeChannel string) chan string
+	GetSuccess() bool
 	exec()
-	close()
 }
 
 func New(command string, args string, makeStdOut bool, makeStdErr bool) Sheller {
@@ -38,12 +39,23 @@ func New(command string, args string, makeStdOut bool, makeStdErr bool) Sheller 
 }
 
 func (s *shell) Run() {
+	s.cmd = exec.Command(s.command, strings.Fields(s.args)...)
 	go s.exec()
 }
 
 func (s *shell) Stop() {
 	s.isStop = true
 	s.stop <- s.isStop
+}
+
+func (s *shell) GetSuccess() bool {
+	var success bool
+
+	if s.cmd.ProcessState != nil && (s.HasStop() || s.HasError()) {
+		success = s.cmd.ProcessState.Success()
+	}
+
+	return success
 }
 
 func (s *shell) HasChannel(typeChannel string) bool {
@@ -57,11 +69,9 @@ func (s *shell) GetChannel(typeChannel string) chan string {
 func (s *shell) exec() {
 	var err error
 
-	cmd := exec.Command(s.command, strings.Fields(s.args)...)
-
 	for _, r := range s.readers {
 		if r.getEnable() == true {
-			err = r.setPipe(cmd)
+			err = r.setPipe(s.cmd)
 			if err != nil {
 				s.err = err
 				s.Stop()
@@ -69,12 +79,12 @@ func (s *shell) exec() {
 		}
 	}
 
-	if err = cmd.Start(); err != nil {
+	if err = s.cmd.Start(); err != nil {
 		s.err = err
 		s.Stop()
 	}
 
-	done := make(chan error, 1)
+	isError := make(chan error, 1)
 
 	for _, r := range s.readers {
 		if r.getEnable() == true {
@@ -90,24 +100,16 @@ func (s *shell) exec() {
 		}()
 
 		wg.Wait()
-		done <- cmd.Wait()
+		isError <- s.cmd.Wait()
 	}()
 
 	select {
 	case <-s.stop:
-		s.err = cmd.Process.Signal(syscall.SIGTERM)
-		s.err = cmd.Process.Signal(syscall.SIGINT)
-	case err = <-done:
+		s.err = s.cmd.Process.Signal(syscall.SIGTERM)
+		s.err = s.cmd.Process.Signal(syscall.SIGINT)
+	case err = <-isError:
 		if err != nil {
 			s.err = err
-		}
-	}
-}
-
-func (s *shell) close() {
-	for _, r := range s.readers {
-		if r.getEnable() == true {
-			r.closeChannel()
 		}
 	}
 }
